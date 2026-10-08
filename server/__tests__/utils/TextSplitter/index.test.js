@@ -45,6 +45,8 @@ describe("TextSplitter", () => {
       sourceDocument: metadata.title,
       source: metadata.url,
       published: metadata.published,
+      author: metadata.docAuthor,
+      description: metadata.description,
     });
   });
 
@@ -128,5 +130,17 @@ describe("TextSplitter", () => {
     expect(logged.some((line) => line.includes(`Chunk header of ${header.length} chars`))).toBe(true);
     expect(chunks.map((chunk) => chunk.slice(header.length))).toEqual(headerless);
     expect(chunks.every((chunk) => chunk.startsWith(header))).toBe(true);
+  });
+
+  test("uses RuleBasedSemanticSplitter for .txt files and chunks appropriately", async () => {
+    const text = "This is the first sentence. This is the second sentence.\n\nThis is a new paragraph.";
+    const textSplitter = new TextSplitter({
+      chunkSize: 50,
+      chunkOverlap: 0,
+      splitByFilename: "example.txt",
+    });
+    const chunks = await textSplitter.splitText(text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks[0].includes("first sentence.")).toBe(true);
   });
 });

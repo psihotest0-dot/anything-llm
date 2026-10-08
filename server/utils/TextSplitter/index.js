@@ -70,6 +70,24 @@ class TextSplitter {
           return metadata?.title || null;
         },
       },
+      docAuthor: {
+        as: "author",
+        pluck: (metadata) => {
+          return metadata?.docAuthor || null;
+        },
+      },
+      description: {
+        as: "description",
+        pluck: (metadata) => {
+          return metadata?.description || null;
+        },
+      },
+      wordCount: {
+        as: "wordCount",
+        pluck: (metadata) => {
+          return metadata?.wordCount || null;
+        },
+      },
       published: {
         as: "published",
         pluck: (metadata) => {
@@ -154,7 +172,6 @@ class TextSplitter {
    * @param {number} [config.chunkOverlap = 20] - The overlap between chunks.
    */
   #setSplitter(config = {}) {
-    // if (!config?.splitByFilename) {// TODO do something when specific extension is present? }
     const chunkHeader = this.stringifyHeader();
     const chunkSize = isNullOrNaN(config?.chunkSize)
       ? 1_000
@@ -169,6 +186,28 @@ class TextSplitter {
         `\x1b[43m[WARN]\x1b[0m Chunk header of ${chunkHeader.length} chars is prepended to each chunk - chunks may be up to ${chunkSize + chunkHeader.length} chars.`
       );
 
+    if (
+      config?.splitByFilename &&
+      (config.splitByFilename.endsWith(".md") ||
+        config.splitByFilename.endsWith(".mdx"))
+    ) {
+      this.log(`Using MarkdownSplitter for ${config.splitByFilename}`);
+      return new MarkdownSplitter({
+        chunkSize,
+        chunkOverlap,
+        chunkHeader,
+      });
+    }
+
+    if (config?.splitByFilename && config.splitByFilename.endsWith(".txt")) {
+      this.log(`Using RuleBasedSemanticSplitter for ${config.splitByFilename}`);
+      return new RuleBasedSemanticSplitter({
+        chunkSize,
+        chunkOverlap,
+        chunkHeader,
+      });
+    }
+
     return new RecursiveSplitter({
       chunkSize,
       chunkOverlap,
@@ -178,6 +217,156 @@ class TextSplitter {
 
   async splitText(documentText) {
     return this.#splitter._splitText(documentText);
+  }
+}
+
+// Rule-based splitter that chunks text intelligently based on paragraph and sentence boundaries.
+class RuleBasedSemanticSplitter {
+  constructor({ chunkSize, chunkOverlap, chunkHeader = null }) {
+    this.chunkSize = chunkSize;
+    this.chunkOverlap = chunkOverlap;
+    this.chunkHeader = chunkHeader;
+
+    this.log(`Will split with`, {
+      chunkSize,
+      chunkOverlap,
+      chunkHeader: chunkHeader ? `${chunkHeader?.slice(0, 50)}...` : null,
+    });
+  }
+
+  log(text, ...args) {
+    console.log(`\x1b[35m[RuleBasedSemanticSplitter]\x1b[0m ${text}`, ...args);
+  }
+
+  async _splitText(documentText) {
+    let chunks = [];
+
+    // Split by paragraphs first (double newline)
+    const paragraphs = documentText.split(/\n\n|\r\n\r\n/);
+
+    let currentChunk = "";
+
+    for (const paragraph of paragraphs) {
+      // If the paragraph itself is larger than chunkSize, we must split it by sentences
+      if (paragraph.length > this.chunkSize) {
+        // Regex to split by sentence endings (., !, ?) followed by a space,
+        // while keeping the punctuation, or match the remaining text.
+        // Fallback to splitting by space if the sentence is still too large (e.g. no punctuation).
+        const sentences = paragraph.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g) || [
+          paragraph,
+        ];
+
+        let subSentences = [];
+        for (const s of sentences) {
+          if (s.length > this.chunkSize) {
+            const words = s.split(" ");
+            let temp = "";
+            for (const word of words) {
+              if (temp.length + word.length + 1 > this.chunkSize) {
+                if (temp) subSentences.push(temp);
+                temp = word;
+              } else {
+                temp += (temp ? " " : "") + word;
+              }
+            }
+            if (temp) subSentences.push(temp);
+          } else {
+            subSentences.push(s);
+          }
+        }
+
+        for (const sentence of subSentences) {
+          const trimmedSentence = sentence.trim();
+          if (!trimmedSentence) continue;
+
+          if (
+            currentChunk.length + trimmedSentence.length + 1 > this.chunkSize &&
+            currentChunk.length > 0
+          ) {
+            chunks.push(currentChunk.trim());
+
+            // Handle overlap for the next chunk
+            if (this.chunkOverlap > 0) {
+              const overlapText = currentChunk.slice(-this.chunkOverlap);
+              // Try to find a clean starting point for the overlap (e.g., after a space)
+              const firstSpace = overlapText.indexOf(" ");
+              currentChunk =
+                firstSpace !== -1
+                  ? overlapText.slice(firstSpace + 1)
+                  : overlapText;
+              currentChunk += " " + trimmedSentence;
+            } else {
+              currentChunk = trimmedSentence;
+            }
+          } else {
+            currentChunk += (currentChunk ? " " : "") + trimmedSentence;
+          }
+        }
+      } else {
+        if (
+          currentChunk.length + paragraph.length + 2 > this.chunkSize &&
+          currentChunk.length > 0
+        ) {
+          chunks.push(currentChunk.trim());
+
+          if (this.chunkOverlap > 0) {
+            const overlapText = currentChunk.slice(-this.chunkOverlap);
+            const firstSpace = overlapText.indexOf(" ");
+            currentChunk =
+              firstSpace !== -1
+                ? overlapText.slice(firstSpace + 1)
+                : overlapText;
+            currentChunk += "\n\n" + paragraph.trim();
+          } else {
+            currentChunk = paragraph.trim();
+          }
+        } else {
+          currentChunk += (currentChunk ? "\n\n" : "") + paragraph.trim();
+        }
+      }
+    }
+
+    if (currentChunk.trim().length > 0) {
+      chunks.push(currentChunk.trim());
+    }
+
+    if (this.chunkHeader) {
+      chunks = chunks.map((chunk) => `${this.chunkHeader}${chunk}`);
+    }
+
+    return chunks;
+  }
+}
+
+// Wrapper for Langchain default MarkdownTextSplitter class.
+class MarkdownSplitter {
+  constructor({ chunkSize, chunkOverlap, chunkHeader = null }) {
+    const { MarkdownTextSplitter } = require("@langchain/textsplitters");
+    this.log(`Will split with`, {
+      chunkSize,
+      chunkOverlap,
+      chunkHeader: chunkHeader ? `${chunkHeader?.slice(0, 50)}...` : null,
+    });
+    this.chunkHeader = chunkHeader;
+    this.engine = new MarkdownTextSplitter({
+      chunkSize,
+      chunkOverlap,
+    });
+  }
+
+  log(text, ...args) {
+    console.log(`\x1b[35m[MarkdownSplitter]\x1b[0m ${text}`, ...args);
+  }
+
+  async _splitText(documentText) {
+    if (!this.chunkHeader) return this.engine.splitText(documentText);
+    const strings = await this.engine.splitText(documentText);
+    const documents = await this.engine.createDocuments(strings, [], {
+      chunkHeader: this.chunkHeader,
+    });
+    return documents
+      .filter((doc) => !!doc.pageContent)
+      .map((doc) => doc.pageContent);
   }
 }
 
