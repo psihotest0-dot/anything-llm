@@ -23,7 +23,17 @@ async function asPdf({
   const pageContent = [];
   let docs = await pdfLoader.load();
 
-  if (docs.length === 0) {
+  let total_word_count = 0;
+  for (const doc of docs) {
+    if (doc.pageContent) {
+      total_word_count += doc.pageContent.split(/\s+/).length;
+    }
+  }
+
+  if (
+    docs.length === 0 ||
+    (docs.length > 0 && total_word_count / docs.length < 50)
+  ) {
     console.log(
       `[asPDF] No text content found for ${filename}. Will attempt OCR parse.`
     );

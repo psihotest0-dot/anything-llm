@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { MimeDetector } = require("./mime");
+const { sanitizeText } = require("../text");
 
 /**
  * The folder where documents are stored to be stored when
@@ -124,6 +125,10 @@ function writeToServerDocuments({
   options = {},
 }) {
   if (!filename) throw new Error("Filename is required!");
+
+  if (data.pageContent) {
+    data.pageContent = sanitizeText(data.pageContent);
+  }
 
   let destination = null;
   if (destinationOverride) destination = path.resolve(destinationOverride);
