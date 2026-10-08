@@ -63,8 +63,10 @@ class DocumentManager {
 
     // Sort documents by published date descending (newest first)
     parsedDocs.sort((a, b) => {
-      const dateA = a.published ? Date.parse(a.published) : 0;
-      const dateB = b.published ? Date.parse(b.published) : 0;
+      let dateA = a.published ? Date.parse(a.published) : 0;
+      let dateB = b.published ? Date.parse(b.published) : 0;
+      if (Number.isNaN(dateA)) dateA = 0;
+      if (Number.isNaN(dateB)) dateB = 0;
       return dateB - dateA;
     });
 

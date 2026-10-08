@@ -199,6 +199,15 @@ class TextSplitter {
       });
     }
 
+    if (config?.splitByFilename && config.splitByFilename.endsWith(".txt")) {
+      this.log(`Using RuleBasedSemanticSplitter for ${config.splitByFilename}`);
+      return new RuleBasedSemanticSplitter({
+        chunkSize,
+        chunkOverlap,
+        chunkHeader,
+      });
+    }
+
     return new RecursiveSplitter({
       chunkSize,
       chunkOverlap,
@@ -208,6 +217,124 @@ class TextSplitter {
 
   async splitText(documentText) {
     return this.#splitter._splitText(documentText);
+  }
+}
+
+// Rule-based splitter that chunks text intelligently based on paragraph and sentence boundaries.
+class RuleBasedSemanticSplitter {
+  constructor({ chunkSize, chunkOverlap, chunkHeader = null }) {
+    this.chunkSize = chunkSize;
+    this.chunkOverlap = chunkOverlap;
+    this.chunkHeader = chunkHeader;
+
+    this.log(`Will split with`, {
+      chunkSize,
+      chunkOverlap,
+      chunkHeader: chunkHeader ? `${chunkHeader?.slice(0, 50)}...` : null,
+    });
+  }
+
+  log(text, ...args) {
+    console.log(`\x1b[35m[RuleBasedSemanticSplitter]\x1b[0m ${text}`, ...args);
+  }
+
+  async _splitText(documentText) {
+    let chunks = [];
+
+    // Split by paragraphs first (double newline)
+    const paragraphs = documentText.split(/\n\n|\r\n\r\n/);
+
+    let currentChunk = "";
+
+    for (const paragraph of paragraphs) {
+      // If the paragraph itself is larger than chunkSize, we must split it by sentences
+      if (paragraph.length > this.chunkSize) {
+        // Regex to split by sentence endings (., !, ?) followed by a space,
+        // while keeping the punctuation, or match the remaining text.
+        // Fallback to splitting by space if the sentence is still too large (e.g. no punctuation).
+        const sentences = paragraph.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g) || [
+          paragraph,
+        ];
+
+        let subSentences = [];
+        for (const s of sentences) {
+          if (s.length > this.chunkSize) {
+            const words = s.split(" ");
+            let temp = "";
+            for (const word of words) {
+              if (temp.length + word.length + 1 > this.chunkSize) {
+                if (temp) subSentences.push(temp);
+                temp = word;
+              } else {
+                temp += (temp ? " " : "") + word;
+              }
+            }
+            if (temp) subSentences.push(temp);
+          } else {
+            subSentences.push(s);
+          }
+        }
+
+        for (const sentence of subSentences) {
+          const trimmedSentence = sentence.trim();
+          if (!trimmedSentence) continue;
+
+          if (
+            currentChunk.length + trimmedSentence.length + 1 > this.chunkSize &&
+            currentChunk.length > 0
+          ) {
+            chunks.push(currentChunk.trim());
+
+            // Handle overlap for the next chunk
+            if (this.chunkOverlap > 0) {
+              const overlapText = currentChunk.slice(-this.chunkOverlap);
+              // Try to find a clean starting point for the overlap (e.g., after a space)
+              const firstSpace = overlapText.indexOf(" ");
+              currentChunk =
+                firstSpace !== -1
+                  ? overlapText.slice(firstSpace + 1)
+                  : overlapText;
+              currentChunk += " " + trimmedSentence;
+            } else {
+              currentChunk = trimmedSentence;
+            }
+          } else {
+            currentChunk += (currentChunk ? " " : "") + trimmedSentence;
+          }
+        }
+      } else {
+        if (
+          currentChunk.length + paragraph.length + 2 > this.chunkSize &&
+          currentChunk.length > 0
+        ) {
+          chunks.push(currentChunk.trim());
+
+          if (this.chunkOverlap > 0) {
+            const overlapText = currentChunk.slice(-this.chunkOverlap);
+            const firstSpace = overlapText.indexOf(" ");
+            currentChunk =
+              firstSpace !== -1
+                ? overlapText.slice(firstSpace + 1)
+                : overlapText;
+            currentChunk += "\n\n" + paragraph.trim();
+          } else {
+            currentChunk = paragraph.trim();
+          }
+        } else {
+          currentChunk += (currentChunk ? "\n\n" : "") + paragraph.trim();
+        }
+      }
+    }
+
+    if (currentChunk.trim().length > 0) {
+      chunks.push(currentChunk.trim());
+    }
+
+    if (this.chunkHeader) {
+      chunks = chunks.map((chunk) => `${this.chunkHeader}${chunk}`);
+    }
+
+    return chunks;
   }
 }
 
