@@ -32,8 +32,8 @@ class DocumentManager {
     const docPaths = (await this.pinnedDocuments()).map((doc) => doc.docpath);
     if (docPaths.length === 0) return [];
 
-    let tokens = 0;
-    const pinnedDocs = [];
+    const parsedDocs = [];
+
     for await (const docPath of docPaths) {
       try {
         const filePath = path.resolve(this.documentStoragePath, docPath);
@@ -57,16 +57,30 @@ class DocumentManager {
           continue;
         }
 
-        if (tokens >= this.maxTokens) {
-          this.log(
-            `Skipping document - Token limit of ${this.maxTokens} has already been exceeded by pinned documents.`
-          );
-          continue;
-        }
-
-        pinnedDocs.push(data);
-        tokens += data.token_count_estimate || 0;
+        parsedDocs.push(data);
       } catch {}
+    }
+
+    // Sort documents by published date descending (newest first)
+    parsedDocs.sort((a, b) => {
+      const dateA = a.published ? Date.parse(a.published) : 0;
+      const dateB = b.published ? Date.parse(b.published) : 0;
+      return dateB - dateA;
+    });
+
+    let tokens = 0;
+    const pinnedDocs = [];
+
+    for (const data of parsedDocs) {
+      if (tokens >= this.maxTokens) {
+        this.log(
+          `Skipping document - Token limit of ${this.maxTokens} has already been exceeded by pinned documents.`
+        );
+        continue; // Or break, but continue matches previous logic structure
+      }
+
+      pinnedDocs.push(data);
+      tokens += data.token_count_estimate || 0;
     }
 
     this.log(

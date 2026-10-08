@@ -70,6 +70,24 @@ class TextSplitter {
           return metadata?.title || null;
         },
       },
+      docAuthor: {
+        as: "author",
+        pluck: (metadata) => {
+          return metadata?.docAuthor || null;
+        },
+      },
+      description: {
+        as: "description",
+        pluck: (metadata) => {
+          return metadata?.description || null;
+        },
+      },
+      wordCount: {
+        as: "wordCount",
+        pluck: (metadata) => {
+          return metadata?.wordCount || null;
+        },
+      },
       published: {
         as: "published",
         pluck: (metadata) => {
@@ -154,7 +172,6 @@ class TextSplitter {
    * @param {number} [config.chunkOverlap = 20] - The overlap between chunks.
    */
   #setSplitter(config = {}) {
-    // if (!config?.splitByFilename) {// TODO do something when specific extension is present? }
     const chunkHeader = this.stringifyHeader();
     const chunkSize = isNullOrNaN(config?.chunkSize)
       ? 1_000
@@ -169,6 +186,19 @@ class TextSplitter {
         `\x1b[43m[WARN]\x1b[0m Chunk header of ${chunkHeader.length} chars is prepended to each chunk - chunks may be up to ${chunkSize + chunkHeader.length} chars.`
       );
 
+    if (
+      config?.splitByFilename &&
+      (config.splitByFilename.endsWith(".md") ||
+        config.splitByFilename.endsWith(".mdx"))
+    ) {
+      this.log(`Using MarkdownSplitter for ${config.splitByFilename}`);
+      return new MarkdownSplitter({
+        chunkSize,
+        chunkOverlap,
+        chunkHeader,
+      });
+    }
+
     return new RecursiveSplitter({
       chunkSize,
       chunkOverlap,
@@ -178,6 +208,38 @@ class TextSplitter {
 
   async splitText(documentText) {
     return this.#splitter._splitText(documentText);
+  }
+}
+
+// Wrapper for Langchain default MarkdownTextSplitter class.
+class MarkdownSplitter {
+  constructor({ chunkSize, chunkOverlap, chunkHeader = null }) {
+    const { MarkdownTextSplitter } = require("@langchain/textsplitters");
+    this.log(`Will split with`, {
+      chunkSize,
+      chunkOverlap,
+      chunkHeader: chunkHeader ? `${chunkHeader?.slice(0, 50)}...` : null,
+    });
+    this.chunkHeader = chunkHeader;
+    this.engine = new MarkdownTextSplitter({
+      chunkSize,
+      chunkOverlap,
+    });
+  }
+
+  log(text, ...args) {
+    console.log(`\x1b[35m[MarkdownSplitter]\x1b[0m ${text}`, ...args);
+  }
+
+  async _splitText(documentText) {
+    if (!this.chunkHeader) return this.engine.splitText(documentText);
+    const strings = await this.engine.splitText(documentText);
+    const documents = await this.engine.createDocuments(strings, [], {
+      chunkHeader: this.chunkHeader,
+    });
+    return documents
+      .filter((doc) => !!doc.pageContent)
+      .map((doc) => doc.pageContent);
   }
 }
 

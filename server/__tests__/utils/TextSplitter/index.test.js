@@ -45,6 +45,8 @@ describe("TextSplitter", () => {
       sourceDocument: metadata.title,
       source: metadata.url,
       published: metadata.published,
+      author: metadata.docAuthor,
+      description: metadata.description,
     });
   });
 
