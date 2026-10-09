@@ -3,15 +3,15 @@ const { SystemSettings } = require("../models/systemSettings.js");
 const { Memory } = require("../models/memory.js");
 const { WorkspaceChats } = require("../models/workspaceChats.js");
 const { Workspace } = require("../models/workspace.js");
+const { Document } = require("../models/documents.js");
+const { CollectorApi } = require("../utils/collectorApi/index.js");
 const truncate = require("truncate");
 const {
   groupByUserWorkspace,
   loadLatestChats,
   resolveLLM,
-  buildObserverUserMessage,
-  runObserver,
-  buildReflectorUserMessage,
-  runReflector,
+  buildSummarizerUserMessage,
+  runSummarizer,
 } = require("./helpers/memory-extraction-utils.js");
 
 // 20 minutes default; 0 disables the idle check.
@@ -56,10 +56,10 @@ const MIN_CHATS_TO_PROCESS = 5;
 })();
 
 /**
- * Process a single (user, workspace) group via two-phase extraction:
- *   Phase 1 (Observer)  — extract candidate facts from conversations
- *   Phase 2 (Reflector) — classify scope, deduplicate, filter against existing memories
- * Then apply the final memories and mark all chats as processed.
+ * Process a single (user, workspace) group via summarization:
+ *   Extract a single summary paragraph of the recent conversation and
+ *   vectorize it directly into the workspace's documents.
+ * Then mark all chats as processed.
  * @param {object[]} groupChats - chats for this group, sorted asc.
  */
 async function processGroup(groupChats) {
@@ -98,83 +98,45 @@ async function processGroup(groupChats) {
       return;
     }
 
-    const workspaceMemories = await Memory.forUserWorkspace(
-      userId,
-      workspaceId
-    );
-    const globalMemories = await Memory.globalForUser(userId);
-
-    const globalSlots = Memory.GLOBAL_LIMIT - globalMemories.length;
-    if (
-      globalSlots <= 0 &&
-      workspaceMemories.length >= Memory.WORKSPACE_LIMIT
-    ) {
-      log(`${tag} is at max capacity. Skipping.`);
-      return;
-    }
-
     log(
-      `Running Observer for ${tag} using ${llm.provider}/${llm.model} on ${chats.length} chat(s).`
+      `Running Summarizer for ${tag} using ${llm.provider}/${llm.model} on ${chats.length} chat(s).`
     );
-    const observerMessage = buildObserverUserMessage(chats);
-    const { candidates, rawText: observerRaw } = await runObserver({
+    const summarizerMessage = buildSummarizerUserMessage(chats);
+    const { summary, rawText } = await runSummarizer({
       ...llm,
-      userMessage: observerMessage,
+      userMessage: summarizerMessage,
     });
 
-    if (candidates === null || candidates.length === 0) {
-      log(`Observer produced no candidates for ${tag}.`);
-      if (observerRaw)
-        log(`Observer raw response:\n${truncate(observerRaw, 2000)}`);
-      if (candidates === null)
-        log(
-          `(Tool handler was never called — model may not have produced a tool call.)`
-        );
-      return;
-    }
-    log(`Observer produced ${candidates.length} candidate(s) for ${tag}:`);
-    for (const c of candidates)
-      log(`  [${c.confidence}] "${c.content}" — ${c.reasoning}`);
-
-    log(`Running Reflector for ${tag} with ${candidates.length} candidate(s).`);
-    const reflectorMessage = buildReflectorUserMessage(
-      candidates,
-      workspaceMemories,
-      globalMemories,
-      globalSlots
-    );
-    const { memories: finalMemories, rawText: reflectorRaw } =
-      await runReflector({
-        ...llm,
-        userMessage: reflectorMessage,
-      });
-
-    if (finalMemories === null || finalMemories.length === 0) {
-      log(`Reflector produced no actionable memories for ${tag}.`);
-      if (reflectorRaw)
-        log(`Reflector raw response:\n${truncate(reflectorRaw, 2000)}`);
-      if (finalMemories === null)
-        log(
-          `(Tool handler was never called — model may not have produced a tool call.)`
-        );
+    if (!summary || summary.trim().length === 0) {
+      log(`Summarizer produced no summary for ${tag}.`);
+      if (rawText)
+        log(`Summarizer raw response:\n${truncate(rawText, 2000)}`);
       return;
     }
 
-    log(`Reflector approved ${finalMemories.length} memory/ies for ${tag}:`);
-    for (const m of finalMemories)
-      log(
-        `  [${m.scope}/${m.action}${m.action === "update" ? `#${m.updateId}` : ""}] "${m.content}" — ${m.reasoning}`
-      );
+    log(`Summarizer produced summary for ${tag}:\n"${summary}"`);
 
-    const result = await Memory.applyExtractedMemories(
-      userId,
-      workspaceId,
-      finalMemories,
-      globalSlots
-    );
-    log(
-      `Applied ${result.workspaceCount} workspace + ${result.globalCount} global + ${result.updatedCount} updated memories for ${tag} in "${workspace.name}". Reviewed ${chats.length} chat(s).`
-    );
+    const collector = new CollectorApi();
+    const result = await collector.processRawText(summary, {
+      title: `Conversation Summary ${new Date().toLocaleString()}`,
+      docAuthor: "AnythingLLM Memory Extraction",
+      description: "Auto-generated summary of recent conversation.",
+    });
+
+    if (!result.success || !result.documents || result.documents.length === 0) {
+      log(`Failed to process summary text into a document for ${tag}: ${result.reason}`);
+      return;
+    }
+
+    const locations = result.documents.map((d) => d.location).filter(Boolean);
+    if (locations.length > 0) {
+      const { failedToEmbed, errors } = await Document.addDocuments(workspace, locations, userId);
+      if (failedToEmbed.length > 0) {
+        log(`Failed to embed summary document into workspace ${workspace.name}: ${Array.from(errors).join(", ")}`);
+      } else {
+        log(`Successfully embedded summary document into workspace ${workspace.name}.`);
+      }
+    }
   } catch (error) {
     log(`Error processing ${tag}: ${error.message}`);
   } finally {
