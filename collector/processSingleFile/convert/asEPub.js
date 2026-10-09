@@ -1,5 +1,6 @@
 const { v4 } = require("uuid");
-const { EPubLoader } = require("langchain/document_loaders/fs/epub");
+const { EPub } = require("epub2");
+const { convert } = require("html-to-text");
 const { tokenizeString } = require("../../utils/tokenizer");
 const {
   createdDate,
@@ -16,9 +17,29 @@ async function asEPub({
 }) {
   let content = "";
   try {
-    const loader = new EPubLoader(fullFilePath, { splitChapters: false });
-    const docs = await loader.load();
-    docs.forEach((doc) => (content += doc.pageContent));
+    const epub = await EPub.createAsync(fullFilePath);
+    const chapters = await Promise.all(
+      epub.flow.map(async (chapter) => {
+        if (!chapter.id) return null;
+        const html = await epub.getChapterRawAsync(chapter.id);
+        if (!html) return null;
+        return {
+          html,
+          title: chapter.title,
+        };
+      })
+    );
+    const validChapters = chapters.filter(Boolean);
+    validChapters.forEach((chapter) => {
+      content += convert(chapter.html, {
+        wordwrap: false,
+        selectors: [
+          { selector: "a", options: { ignoreHref: true } },
+          { selector: "img", format: "skip" },
+        ],
+      }) + "\n\n";
+    });
+    content = content.trim();
   } catch (err) {
     console.error("Could not read epub file!", err);
   }
