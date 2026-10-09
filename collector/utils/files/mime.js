@@ -12,39 +12,32 @@ class MimeDetector {
 
   constructor() {
     this.lib = MimeLib;
-    this.setOverrides();
   }
 
-  setOverrides() {
-    // the .ts extension maps to video/mp2t because of https://en.wikipedia.org/wiki/MPEG_transport_stream
-    // which has had this extension far before TS was invented. So need to force re-map this MIME map.
-    this.lib.define(
-      {
-        "text/plain": [
-          "ts",
-          "tsx",
-          "py",
-          "opts",
-          "lock",
-          "jsonl",
-          "qml",
-          "sh",
-          "c",
-          "cs",
-          "h",
-          "js",
-          "lua",
-          "pas",
-          "r",
-          "go",
-          "ino",
-          "hpp",
-          "linq",
-          "cs",
-        ],
-      },
-      true
-    );
+  // the .ts extension maps to video/mp2t because of https://en.wikipedia.org/wiki/MPEG_transport_stream
+  // which has had this extension far before TS was invented. So need to force re-map this MIME map.
+  getOverrides() {
+    return [
+      "ts",
+      "tsx",
+      "py",
+      "opts",
+      "lock",
+      "jsonl",
+      "qml",
+      "sh",
+      "c",
+      "cs",
+      "h",
+      "js",
+      "lua",
+      "pas",
+      "r",
+      "go",
+      "ino",
+      "hpp",
+      "linq",
+    ];
   }
 
   /**
@@ -53,6 +46,10 @@ class MimeDetector {
    * @returns {string}
    */
   getType(filepath) {
+    const ext = filepath.split(".").pop()?.toLowerCase();
+    if (this.getOverrides().includes(ext)) {
+      return "text/plain";
+    }
     const parsedMime = this.lib.getType(filepath);
     if (!!parsedMime) return parsedMime;
     return null;
