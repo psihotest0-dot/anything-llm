@@ -1442,7 +1442,7 @@ entities@^4.2.0, entities@^4.4.0:
 
 "epub2@git+https://github.com/Mintplex-Labs/epub2-static.git#main":
   version "3.0.2"
-  resolved "git+ssh://git@github.com/Mintplex-Labs/epub2-static.git#eb0a45cd41ac1a5b4c97766e9935d97583104d35"
+  resolved "git+https://github.com/Mintplex-Labs/epub2-static.git#eb0a45cd41ac1a5b4c97766e9935d97583104d35"
   dependencies:
     adm-zip "^0.5.10"
     array-hyper-unique "^2.1.4"
